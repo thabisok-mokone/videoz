@@ -5,11 +5,9 @@ import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
-import Divider from '@mui/material/Divider';
 import FormControl from '@mui/material/FormControl';
 import InputLabel from '@mui/material/InputLabel';
 import TextField from '@mui/material/TextField';
-import FormGroup from '@mui/material/FormGroup';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Checkbox from '@mui/material/Checkbox';
 
@@ -23,6 +21,11 @@ const Editor = ()=> {
 
     const [startTime, setStartTime] = React.useState(0);
     const [endTime, setEndTime] = React.useState(0);
+
+    const [startTimeString, setStartTimeString] = React.useState("00:00:00");
+    const [endTimeString, setEndTimeString] = React.useState("00:00:00");
+
+    const [videoDuration, setVideoDuration] = React.useState(0);
 
     const [isTimeCorrect, setIsTimeCorrect] = React.useState(true);
 
@@ -40,11 +43,19 @@ const Editor = ()=> {
 
     const [canProcess, setCanProcess] = React.useState(false); 
 
+    const [canPlayVideo, setCanPlayVideo] = React.useState(false); 
+
     const videoPlayer = React.useRef(null);
 
     React.useEffect(()=>{
         if (container=="mp4"||container=="webm") {
-            if (startTime>=endTime) {
+            if (startTime>=endTime||startTime>videoDuration||endTime>videoDuration) {
+                setIsTimeCorrect(true);
+            } else {
+                setIsTimeCorrect(false);
+            }
+        } else if (container=="png"||container=="jpg") {
+            if (startTime>videoDuration) {
                 setIsTimeCorrect(true);
             } else {
                 setIsTimeCorrect(false);
@@ -52,13 +63,23 @@ const Editor = ()=> {
         } else {
             setIsTimeCorrect(false);
         }
-       
-    }, [startTime, endTime, container]);
+    }, [startTime, endTime, container, videoDuration]);
 
     React.useEffect(()=>{
+
+        if (state.selectedVideos.length == 1) {
+            if (getVideoExtension(state.selectedVideos[0]) == "mp4" || getVideoExtension(state.selectedVideos[0]) == "webm") {
+                setCanPlayVideo(true);
+            } else {
+                window.api.callEvent('get-video-info', state.selectedVideos[0]);
+            }
+        }
+       
         if (state.fromProcess) {
             setStartTime(state.startTime);
             setEndTime(state.endTime);
+            setStartTimeString(state.startTimeString);
+            setEndTimeString(state.endTimeString);
             setResolutionX(state.resolutionX);
             setResolutionY(state.resolutionY);
             setContainer(state.container);
@@ -75,11 +96,32 @@ const Editor = ()=> {
                 setOutputPath(data);
             }
         });
+
+        window.api.addListener('got-video-info', (data)=>{
+            if (data) {
+                setVideoDuration(data.duration);
+                if (!state.fromProcess) {
+                    setEndTime(data.duration);
+                    setEndTimeString(toHMS(data.duration));
+                }
+                setResolutionX(data.resolution.x);
+                setResolutionY(data.resolution.y);
+                setCanProcess(true);
+            }
+        });
+
     }, []);
 
     const getVideoNameAndExtension = (videoPath)=> {
         const splittedPath = videoPath.split("\\");
         return splittedPath[splittedPath.length -1];
+    }
+
+    const getVideoExtension = (videoPath)=> {
+        const splittedPath = videoPath.split("\\");
+        const nameAndExt = splittedPath[splittedPath.length -1];
+        const indexOfExt = nameAndExt.lastIndexOf(".");
+        return nameAndExt.slice(indexOfExt+1);
     }
 
     const getVideoPath = (videoPath)=> {
@@ -94,10 +136,13 @@ const Editor = ()=> {
         return nameAndExt.slice(0, indexOfExt);
     }
 
-    const valueLabelFormat = (value)=> {  
-        const minute = Math.floor(value / 60);
-        const secondLeft = Math.floor(value - minute * 60);
-        return `${minute}:${secondLeft < 9 ? `0${secondLeft}` : secondLeft}`;
+    const toHMS = (value)=> {  
+        return new Date(value * 1000).toISOString().substr(11, 8);
+    }
+
+    const toSeconds = (value) => {
+        let a = value.split(':')
+        return (+a[0]) * 60 * 60 + (+a[1]) * 60 + (+a[2])
     }
 
     const [outputPath , setOutputPath] = React.useState(getVideoPath(state.selectedVideos[0]));
@@ -105,6 +150,7 @@ const Editor = ()=> {
     const navigateToProgress = ()=> {
         
         window.api.removeListener('selected-output-directory');
+        window.api.removeListener('got-video-info');
 
         let data = {};
         let videos = state.selectedVideos;
@@ -218,6 +264,8 @@ const Editor = ()=> {
                     fromProcess: true,
                     startTime,
                     endTime,
+                    startTimeString,
+                    endTimeString,
                     resolutionX,
                     resolutionY,
                     container,
@@ -243,11 +291,11 @@ const Editor = ()=> {
         }}>
             <Stack spacing={3}>
                 {state.selectedVideos.length == 1?
-                    <Typography variant="h4" align="center" color="primary">{getVideoNameAndExtension(state.selectedVideos[0])}</Typography>
+                    <Typography variant="h4" align="center" noWrap={true} color="primary">{getVideoNameAndExtension(state.selectedVideos[0])}</Typography>
                 :
                     <Typography variant="h4" align="center" color="primary">Multiple files selected</Typography>
                 }
-                {state.selectedVideos.length == 1? 
+                {state.selectedVideos.length == 1 && canPlayVideo? 
                 <video
                     ref={videoPlayer}
                     muted 
@@ -256,10 +304,12 @@ const Editor = ()=> {
                     onLoadedMetadata={(event)=>{
                         if (!state.fromProcess) {
                             setEndTime(event.target.duration);
+                            setEndTimeString(toHMS(event.target.duration));
                             setResolutionX(event.target.videoWidth);
                             setResolutionY(event.target.videoHeight);
-
+                            setVideoDuration(event.target.duration);
                         } else {
+                            setVideoDuration(event.target.duration);
                             videoPlayer.current.currentTime = state.videoCurrentTime;
                         }
                         setCanProcess(true);
@@ -278,12 +328,34 @@ const Editor = ()=> {
                 {(container == "mp4" || container == "webm") && state.selectedVideos.length == 1?
                     <Stack spacing={6} direction="row">
                         <Stack spacing={1} direction="row" sx={{ flex: 1 }}>
-                            <Button fullWidth variant="contained" onClick={()=>{setStartTime(videoCurrentTime);}}>Set start</Button>
-                            <TextField fullWidth label="Start time" variant="outlined" value={valueLabelFormat(startTime)} inputProps={{readOnly: true, disabled: true}} error={isTimeCorrect} />
+                            {canPlayVideo?
+                                <Button fullWidth variant="contained" onClick={()=>{
+                                    setStartTime(videoCurrentTime);
+                                    setStartTimeString(toHMS(videoCurrentTime));
+                                }}>Set start</Button>
+                            :
+                                null
+                            }
+                            <TextField fullWidth label="Start time" variant="outlined" value={startTimeString} error={isTimeCorrect} onChange={(event)=>{
+                                let input = event.target.value = event.target.value.replace(/[^0-9:]/g,'');
+                                setStartTimeString(input);
+                                setStartTime(toSeconds(input));
+                            }} />
                         </Stack>
                         <Stack spacing={1} direction="row" sx={{ flex: 1 }}>
-                            <TextField fullWidth label="End time" variant="outlined" value={valueLabelFormat(endTime)} inputProps={{readOnly: true, disabled: true}} error={isTimeCorrect} />
-                            <Button fullWidth variant="contained" onClick={()=>{setEndTime(videoCurrentTime);}}>Set end</Button>
+                            <TextField fullWidth label="End time" variant="outlined" value={endTimeString} error={isTimeCorrect} onChange={(event)=>{
+                                let input = event.target.value = event.target.value.replace(/[^0-9:]/g,'');
+                                setEndTimeString(input);
+                                setEndTime(toSeconds(input));
+                            }} />
+                            {canPlayVideo?
+                                <Button fullWidth variant="contained" onClick={()=>{
+                                    setEndTime(videoCurrentTime);
+                                    setEndTimeString(toHMS(videoCurrentTime));
+                                }}>Set end</Button>
+                            :
+                                null
+                            }
                         </Stack> 
                     </Stack>
                 :
@@ -291,8 +363,19 @@ const Editor = ()=> {
                 }  
                 {(container == "png" || container == "jpg") && state.selectedVideos.length == 1?
                     <Stack spacing={1} direction="row" sx={{ flex: 1 }}>
-                        <Button fullWidth variant="contained" onClick={()=>{setStartTime(videoCurrentTime);}}>Set frame</Button>
-                        <TextField fullWidth label="Frame time" variant="outlined" value={valueLabelFormat(startTime)} inputProps={{readOnly: true, disabled: true}} />
+                            {canPlayVideo?
+                                <Button fullWidth variant="contained" onClick={()=>{
+                                    setStartTime(videoCurrentTime);
+                                    setStartTimeString(toHMS(videoCurrentTime));
+                                }}>Set frame</Button>
+                            :
+                                null
+                            }
+                        <TextField fullWidth label="Frame time" variant="outlined" error={isTimeCorrect} value={startTimeString} onChange={(event)=>{
+                                let input = event.target.value = event.target.value.replace(/[^0-9:]/g,'');
+                                setStartTimeString(input);
+                                setStartTime(toSeconds(input));
+                        }} />
                     </Stack>
                 :
                     null
@@ -360,8 +443,8 @@ const Editor = ()=> {
                     null
                 }
                 <Stack direction="row" spacing={1}>
-                    <TextField fullWidth label="Outpup directory" variant="outlined" value={outputPath} inputProps={{readOnly: true, disabled: true}} />
-                    <Button  
+                    <TextField fullWidth label="Output directory" variant="outlined" value={outputPath} inputProps={{readOnly: true, disabled: true}} />
+                    <Button 
                         variant="contained" 
                         onClick={()=>{
                             window.api.callEvent('select-output-directory');
@@ -417,6 +500,8 @@ const Editor = ()=> {
                         variant="contained" 
                         color="error" 
                         onClick={()=>{
+                            window.api.removeListener('selected-output-directory');
+                            window.api.removeListener('got-video-info');
                              navigate("/", { replace: true }); 
                         }}>
                         Cancel
